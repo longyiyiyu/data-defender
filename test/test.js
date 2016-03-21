@@ -17,6 +17,26 @@ describe('data defender', function() {
         compare('insert-arg');
     });
 
+    it('should insert the code into the beginning of scope when the match point is global var', function() {
+        compare('insert-global-var');
+    });
+
+    it('should insert the code next to the assignment of vars', function() {
+        compare('insert-assignment');
+    });
+
+    it('should insert the code into the loop if the data member accessing occured in loop', function() {
+        compare('insert-init-in-for');
+    });
+
+    it('should insert the right code of member with array', function() {
+        compare('insert-array-member');
+    });
+
+    it('should insert the right code of local var of closure function', function() {
+        compare('insert-closure-fun-var');
+    });
+
     // it('should recognize the data in ', function() {
     //     compare('');
     // });

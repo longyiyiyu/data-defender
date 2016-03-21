@@ -13,5 +13,5 @@ function test(obj) {
         };
     }
 
-    // obj.count
+    obj.count.count = 6;
 }
