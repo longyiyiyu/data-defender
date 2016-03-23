@@ -21,28 +21,66 @@ var pSplice = Array.prototype.splice;
 var stack = [];
 var globalId = 1;
 
-function ignoreItem(item) {
-    var funObj = stack[stack.length - 1];
+function Scope(opts) {
+    var self = this;
 
-    if (funObj.ignores.indexOf(item) < 0) {
-        // console.log('ignore:', funObj.name, item);
-        funObj.ignores.push(item);
-    }
+    this.name = opts.name || globalId++;
+    this.params = opts.params || [];
+    this.localVars = opts.localVars || [];
+
+    this.body = opts.body;
+    this.loopStack = [];
+    this.vars = [];
+    this.varMap = {};
+
+    this.insertor = function(ast) {
+        // console.log('insert code into beginning');
+        if (_.isArray(ast)) {
+            pUnshift.apply(self.body.body, ast);
+        } else {
+            self.body.body.unshift(ast);
+        }
+    };
 }
 
-function checkIgnore(node) {
-    var keys = VisitorKeys[node.type];
-
-    if (keys && keys.length) {
-        keys.forEach(function(key) {
-            var str = checkMemberExpressionNode(node[key], node);
-
-            if (str) {
-                ignoreItem(str);
-            }
+Scope.prototype = {
+    constructor: Scope,
+    addParam: function(param) {
+        this.params.push(param);
+        this.addVarMap(param, {
+            insertor: this.insertor
         });
+    },
+    addLocalVar: function(v, opt) {
+        this.localVars.push(v);
+        this.addVarMap(v, opt);
+    },
+    addVarMap: function(key, opt) {
+        var hasValue = this.varMap[key] && this.varMap[key].hasValue;
+
+        this.varMap[key] = opt;
+        this.varMap[key].hasValue = hasValue;
+    },
+    getVarMap: function(key) {
+        return this.varMap[key];
+    },
+    ignoreItem: function(key) {
+        if (!this.varMap[key]) {
+            this.varMap[key] = {};
+        }
+
+        this.varMap[key].hasValue = true;
+    },
+    isIgnore: function(key) {
+        return this.varMap[key] && this.varMap[key].hasValue;
+    },
+    insertItems: function(array) {
+        this.vars = this.vars.concat(array);
+    },
+    hasInserted: function(key) {
+        return this.vars.indexOf(key) > -1;
     }
-}
+};
 
 function checkMemberExpressionNode(node, parent, all) {
     var item = '';
@@ -104,63 +142,124 @@ function checkMemberExpressionNode(node, parent, all) {
     }
 }
 
-function hasInserted(rkey, item) {
-    var o;
+function processIgnore(item, node, parent, qs) {
+    var funObj = stack[stack.length - 1];
+    var astItem;
+    var matches;
 
-    // console.log('hasInserted:', rkey, item, stack.length);
-    // if (stack.length < 2) {
-    //     return false;
-    // }
-
-    for (var i = stack.length - 1; i >= 0; --i) {
-        o = stack[i];
-        if (o.vars[rkey] && (o.vars[rkey].items.indexOf(item) > -1)) {
-            return true;
-        }
+    if (item.split('.').length > 1) {
+        return;
     }
 
-    return false;
+    funObj.ignoreItem(item);
+
+    if (funObj.loopStack.length > 0) {
+        funObj = funObj.loopStack[funObj.loopStack.length - 1];
+    }
+
+    funObj.addVarMap(item, {
+        insertor: function(ast) {
+            for (var i = 0, l = funObj.body.body.length; i < l; ++i) {
+                astItem = funObj.body.body[i];
+                matches = esquery(astItem, qs);
+                if (matches && matches.indexOf(node) > -1) {
+                    break;
+                }
+            }
+
+            if (i >= l) {
+                // 到了这里应该有问题
+                return;
+            }
+
+            if (_.isArray(ast)) {
+                ast.unshift(i + 1, 0);
+                pSplice.apply(funObj.body.body, ast);
+            } else {
+                funObj.body.body.splice(i + 1, 0, ast);
+            }
+        }
+    });
+}
+
+function checkIgnore(node, parent) {
+    var keys = VisitorKeys[node.type];
+    var funObj = stack[stack.length - 1];
+
+    if (keys && keys.length) {
+        keys.forEach(function(key) {
+            var str = checkMemberExpressionNode(node[key], node);
+
+            if (str && str.split('.').length === 1) {
+                // funObj.ignoreItem(str);
+                processIgnore(str, node, parent, node.type);
+            } else if (str) {
+                funObj.ignoreItem(str);
+            }
+        });
+    }
+}
+
+function hasInserted(rkey, item) {
+    var funObj = stack[stack.length - 1];
+
+    return funObj.hasInserted(item);
 }
 
 function getInsertorByKey(key, item) {
-    var funObj;
+    var funObj = stack[stack.length - 1];
     var ret;
     var matchObj;
 
-    for (var i = stack.length - 1; i >= 0; --i) {
-        funObj = stack[i];
-        // console.log('getInsertorByKey', key, item, funObj.ignores);
-        // console.log('\n');
-        // ignore
-        if (funObj.ignores.indexOf(item) > -1) {
-            return null;
-        }
+    if (funObj.isIgnore(item)) {
+        return null;
+    }
 
-        // 先找loop里面的
-        for (var j = funObj.loopStack.length - 1; j >= 0; --j) {
-            if ((matchObj = funObj.loopStack[j].assignmentVars[key])) {
-                break;
-            }
-        }
-
-        if (!matchObj) {
-            // 先找赋值变量
-            matchObj = funObj.assignmentVars[key];
-            if (!matchObj) {
-                // 再找局部变量
-                matchObj = searchKey(funObj.localVars, key);
-                if (!matchObj) {
-                    // 再找参数
-                    matchObj = searchKey(funObj.params, key);
-                }
-            }
-        }
-
-        if (matchObj) {
-            // 找到了
+    // 先找loop里面的
+    for (var j = funObj.loopStack.length - 1; j >= 0; --j) {
+        if ((matchObj = funObj.loopStack[j].getVarMap(key))) {
             break;
         }
     }
+
+    if (!matchObj) {
+        matchObj = funObj.getVarMap(key);
+    }
+
+    // for (var i = stack.length - 1; i >= 0; --i) {
+    //     funObj = stack[i];
+    //     // console.log('getInsertorByKey', key, item, funObj.ignores);
+    //     // console.log('\n');
+    //     // ignore
+    //     if (funObj.ignores.indexOf(item) > -1) {
+    //         return null;
+    //     }
+
+    // // 先找loop里面的
+    // for (var j = funObj.loopStack.length - 1; j >= 0; --j) {
+    //     if ((matchObj = funObj.loopStack[j].assignmentVars[key])) {
+    //         break;
+    //     }
+    // }
+
+    //     if (!matchObj) {
+    //         // 先找赋值变量
+    //         matchObj = funObj.assignmentVars[key];
+    //         if (!matchObj) {
+    //             // 再找局部变量
+    //             matchObj = searchKey(funObj.localVars, key);
+    //             if (!matchObj) {
+    //                 // 再找参数
+    //                 matchObj = searchKey(funObj.params, key);
+    //             }
+    //         }
+    //     }
+
+    //     if (matchObj) {
+    //         // 找到了
+    //         break;
+    //     }
+    // }
 
     if (matchObj) {
         return {
@@ -223,99 +322,8 @@ function processVals(str, opt) {
     }
 
     // 保存已经insert的item，避免重复
-    varObj = funObj.vars[key];
-    if (!varObj) {
-        varObj = funObj.vars[key] = {
-            items: []
-        };
-    }
-
-    varObj.items = varObj.items.concat(list);
-
-    // item = '';
-    // for (var i = 0, l = vars.length - 1; i < l; ++i) {
-    //     item = item + (i === 0 ? '' : '.') + vars[i];
-    //     if (varObj.items.indexOf(item) < 0 &&
-    //         !hasInserted(vars[0], item)) {
-    //         // console.log('push item:', item);
-    //         varObj.items.push(item);
-    //     }
-    // }
+    funObj.insertItems(list);
 }
-
-function searchKey(arr, key) {
-    for (var i = 0, l = arr.length; i < l; ++i) {
-        if (arr[i].name === key) return arr[i];
-    }
-
-    return null;
-}
-
-function insertorFactory(node, getQueryFun, funObj) {
-    return function(ast) {
-        var astItem;
-        var matches;
-
-        for (var i = 0, l = funObj.body.body.length; i < l; ++i) {
-            astItem = funObj.body.body[i];
-            matches = esquery(astItem, getQueryFun());
-        }
-    };
-}
-
-function processAssignment(item, node, parent) {
-    var funObj = stack[stack.length - 1];
-    var astItem;
-    var matches;
-
-    if (item.split('.').length > 1) {
-        return;
-    }
-
-    ignoreItem(item);
-
-    if (funObj.loopStack.length > 0) {
-        funObj = funObj.loopStack[funObj.loopStack.length - 1];
-    }
-
-    funObj.assignmentVars[item] = {
-        name: item,
-        insertor: function(ast) {
-            for (var i = 0, l = funObj.body.body.length; i < l; ++i) {
-                astItem = funObj.body.body[i];
-                matches = esquery(astItem, 'AssignmentExpression[operator="="]');
-                if (matches && matches.indexOf(node) > -1) {
-                    break;
-                }
-            }
-
-            // console.log('>><<', i, l, funObj.body.body);
-            if (i >= l) {
-                // 到了这里应该有问题
-                return;
-            }
-
-            if (_.isArray(ast)) {
-                ast.unshift(i + 1, 0);
-                pSplice.apply(funObj.body.body, ast);
-            } else {
-                funObj.body.body.splice(i + 1, 0, ast);
-            }
-        }
-    };
-}
-
-// test //
-// function test() {
-//     var str = 'a = 2';
-//     // var str = 'a.b.c[0].d.e = 2';
-//     var ast = esprima.parse(str);
-//     console.log(ast.body[0].expression.left);
-//     var ret = checkMemberExpressionNode(ast.body[0].expression.left);
-//     console.log(ret);
-// }
-// test();
-// test //
 
 function defend(str, opt) {
     var ast = esprima.parse(str);
@@ -331,28 +339,11 @@ function defend(str, opt) {
             var paramObj;
 
             if ((node.type === Syntax.FunctionDeclaration || node.type === Syntax.FunctionExpression || node.type === Syntax.CatchClause) && node.body && node.body.type === Syntax.BlockStatement) {
-                beginningInsertor = function(ast) {
-                    // console.log('insert code into beginning');
-                    if (_.isArray(ast)) {
-                        pUnshift.apply(node.body.body, ast);
-                    } else {
-                        node.body.body.unshift(ast);
-                    }
-                };
-
                 // 遇到函数，先把函数信息压栈
-                funObj = {
-                    name: node.id && node.id.name || globalId++,
-                    params: [],
-                    localVars: [],
-                    // globalVars: [],
-                    vars: {},
-                    assignmentVars: {},
-                    ignores: [],
-                    loopStack: [],
-                    body: node.body,
-                    insertor: beginningInsertor
-                };
+                funObj = new Scope({
+                    name: node.id && node.id.name,
+                    body: node.body
+                });
 
                 // 记录函数参数 //
                 if (node.param) {
@@ -361,10 +352,7 @@ function defend(str, opt) {
 
                 for (var i = 0, l = node.params.length; i < l; ++i) {
                     if (node.params[i].type === Syntax.Identifier) {
-                        funObj.params.push({
-                            name: node.params[i].name,
-                            insertor: beginningInsertor
-                        });
+                        funObj.addParam(node.params[i].name);
                     }
                 }
                 // 记录函数参数 //
@@ -386,20 +374,15 @@ function defend(str, opt) {
                             cnode.id && cnode.id.name && !cnode.hasTraversed) {
                             // 记录局部变量 //
                             funObj = stack[stack.length - 1];
-                            funObj.localVars.push({
-                                name: cnode.id.name,
+                            funObj.addLocalVar(cnode.id.name, {
                                 insertor: function(ast) {
-                                    // console.log('insert code into local vars:', cnode.id.name);
                                     var index;
 
                                     if (parent.body && parent.body.length) {
                                         index = parent.body.indexOf(node);
-                                        // console.log('>>>>', index, parent.body, node);
-                                        // console.log('<<<', _.isArray(ast), ast);
                                         if (index > -1) {
                                             if (_.isArray(ast)) {
                                                 ast.unshift(index + 1, 0);
-                                                // console.log('>>>>', ast);
                                                 pSplice.apply(parent.body, ast);
                                             } else {
                                                 parent.body.splice(index + 1, 0, ast);
@@ -412,7 +395,7 @@ function defend(str, opt) {
 
                             if (cnode.init) {
                                 // 已经初始化
-                                ignoreItem(cnode.id.name);
+                                funObj.ignoreItem(cnode.id.name);
                             }
                         }
 
@@ -430,37 +413,25 @@ function defend(str, opt) {
                 node.operator === '=' && !node.hasTraversed) {
                 str = checkMemberExpressionNode(node.left);
                 if (str) {
-                    processAssignment(str, node, parent);
+                    processIgnore(str, node, parent, 'AssignmentExpression[operator="="]');
                 }
             }
 
             // 循环的处理与函数比较像
             if (node.type === Syntax.ForStatement) {
                 funObj = stack[stack.length - 1];
-                loopBeginningInsertor = function(ast) {
-                    // console.log('insert code into loop beginning\n');
-                    if (_.isArray(ast)) {
-                        pUnshift.apply(node.body.body, ast);
-                    } else {
-                        node.body.body.unshift(ast);
-                    }
-                };
-
-                loopObj = {
-                    body: node.body,
-                    assignmentVars: {},
-                    insertor: loopBeginningInsertor
-                };
+                loopObj = new Scope({
+                    body: node.body
+                });
 
                 paramObj = {
                     enter: function(cnode, cparent) {
                         if (cnode.type === Syntax.VariableDeclarator &&
                             cnode.id && cnode.id.name) {
                             cnode.hasTraversed = true;
-                            loopObj.assignmentVars[cnode.id.name] = {
-                                name: cnode.id.name,
-                                insertor: loopBeginningInsertor
-                            };
+                            loopObj.addVarMap(cnode.id.name, {
+                                insertor: loopObj.insertor
+                            });
                         }
 
                         if (cnode.type === Syntax.AssignmentExpression &&
@@ -468,11 +439,10 @@ function defend(str, opt) {
                             cnode.hasTraversed = true;
                             str = checkMemberExpressionNode(cnode.left);
                             if (str && str.split('.').length === 1) {
-                                loopObj.assignmentVars[str] = {
-                                    name: str,
-                                    insertor: loopBeginningInsertor
-                                };
-                                ignoreItem(str);
+                                loopObj.addVarMap(str, {
+                                    insertor: loopObj.insertor
+                                });
+                                funObj.ignoreItem(str);
                             }
                         }
                     }
@@ -482,12 +452,11 @@ function defend(str, opt) {
                 node.update && estraverse.traverse(node.update, paramObj);
 
                 funObj.loopStack.push(loopObj);
-                // console.log('loop obj push', funObj.loopStack[0].assignmentVars);
             }
 
             // ignores //
             if (node.type === Syntax.LogicalExpression || node.type === Syntax.UnaryExpression || node.type === Syntax.BinaryExpression || node.type === Syntax.IfStatement) {
-                checkIgnore(node);
+                checkIgnore(node, parent);
             }
             // ignores //
 
@@ -501,7 +470,7 @@ function defend(str, opt) {
                     str.forEach(function(item) {
                         processVals(item, opt);
                     });
-                    
+
                     // console.log('<<<', funObj.vars);
                     return estraverse.VisitorOption.Skip;
                 }
@@ -518,30 +487,6 @@ function defend(str, opt) {
             if (node.type === Syntax.FunctionDeclaration ||
                 node.type === Syntax.FunctionExpression ||
                 node.type === Syntax.CatchClause) {
-                // console.log('leave fun:', stack);
-                // funObj = stack[stack.length - 1];
-                // for (var key in funObj.vars) {
-                //     if (funObj.vars.hasOwnProperty(key)) {
-                //         for (var i = funObj.vars[key].items.length - 1; i >= 0; --i) {
-                //             item = funObj.vars[key].items[i];
-                //             // console.log('>>>', item);
-                //             match = getInsertorByKey(key, item);
-                //             if (match) {
-                //                 str = item + ' = ' + item + ' || {};';
-                //                 insertAST = esprima.parse(str).body;
-                //                 match.insertor(insertAST);
-                //             }
-                //         }
-
-                //         // match = getInsertorByKey(key);
-                //         // str = getInsertCodeStringByKey(key, match.matchObj);
-                //         // if (str) {
-                //         //     // console.log('insert code:', str);
-                //         //     insertAST = esprima.parse(str).body;
-                //         //     match.insertor(insertAST);
-                //         // }
-                //     }
-                // }
                 // 退栈
                 stack.pop();
             }
