@@ -1,5 +1,5 @@
 {
-  "name": "data-defender",
+  "name": "data-member-defender",
   "version": "0.0.1",
   "description": "prevent badjs of read an attribute of null object",
   "main": "index.js",
