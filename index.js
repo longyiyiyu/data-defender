@@ -315,7 +315,8 @@ function processVals(str, opt) {
         // console.log('>>>', item, match.insertor);
         if (match) {
             // str = item + ' = ' + item + ' || {};';
-            str = item + ' = typeof ' + item + ' === undefined || ' + item + ' === null ? {} : ' + item;
+            str = item + ' = ' + item + ' || ' + item + ' === "" ? ' + item + ' : {}';
+            // str = item + ' = ' + item + ' === undefined || ' + item + ' === null ? {} : ' + item;
             insertAST = esprima.parse(str).body;
             match.insertor(insertAST);
         }
@@ -455,7 +456,8 @@ function defend(str, opt) {
             }
 
             // ignores //
-            if (node.type === Syntax.LogicalExpression || node.type === Syntax.UnaryExpression || node.type === Syntax.BinaryExpression || node.type === Syntax.IfStatement) {
+            if (node.type === Syntax.LogicalExpression || node.type === Syntax.UnaryExpression || node.type === Syntax.BinaryExpression || node.type === Syntax.IfStatement || 
+                node.type === Syntax.ConditionalExpression) {
                 checkIgnore(node, parent);
             }
             // ignores //

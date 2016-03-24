@@ -1,6 +1,6 @@
 {
   "name": "data-member-defender",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "prevent badjs of read an attribute of null object",
   "main": "index.js",
   "scripts": {
@@ -24,8 +24,8 @@
     "escodegen": "^1.8.0",
     "esprima": "^2.7.2",
     "esquery": "^0.4.0",
-    "estraverse": "^4.1.1",
-    "lodash": "^4.5.1"
+    "estraverse": "^4.2.0",
+    "lodash": "^4.6.1"
   },
   "devDependencies": {
     "should": "^7.1.0"

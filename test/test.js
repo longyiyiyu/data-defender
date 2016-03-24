@@ -7,7 +7,7 @@ function compare(caseName) {
     var expect = fs.readFileSync(path.join(__dirname, 'expect', caseName + '.js'), 'utf-8');
     var out = defender(src);
 
-    fs.writeFileSync(path.join(__dirname, 'src', 'output', caseName + '.out.js'), out, 'utf-8');
+    // fs.writeFileSync(path.join(__dirname, 'src', 'output', caseName + '.out.js'), out, 'utf-8');
 
     out.should.equal(expect);
 }
