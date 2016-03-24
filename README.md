@@ -22,3 +22,6 @@ var newContent = defend(content, {
     ignores: ['T']
 });
 ```
+
+## reference
+[数据字段防卫探索](http://imweb.io/topic/56f3892f14ea0f7263803d46)
